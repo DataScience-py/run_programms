@@ -58,7 +58,7 @@ def collect_programs_from_user(data_file: str) -> tuple[list[str], list[str]]:
 def main() -> None:
     """Main function of the program."""
     # Get the path to the folder where the script is located
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = ''
     run_programs_dir = os.path.join(base_dir, "run_programs")
 
     # File paths
