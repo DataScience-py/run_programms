@@ -35,5 +35,5 @@ This script manages the launching and stopping of programs. It can either start 
 To start the program manager:
 
 ```bash
-python script_name.py
+python run_programms.py
 ```
