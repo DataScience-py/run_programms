@@ -5,37 +5,59 @@ pipeline {
         docker {
             // Используем образ, где есть и Maven, и JDK 21
             image 'maven:3.9-eclipse-temurin-21'
-            // args '-v $HOME/.m2:/root/.m2' // Можно оставить для кэширования Maven
+            // Если вы хотите кэшировать .m2 репозиторий между сборками на хосте:
+            // 1. Убедитесь, что директория /path/to/host/m2repo существует и ДОСТУПНА ДЛЯ ЗАПИСИ пользователю jenkins (UID 122) на ХОСТЕ.
+            // 2. Раскомментируйте следующую строку args:
+            // args '-v /path/to/host/m2repo:/var/maven/repository:rw,z' // Замените /path/to/host/m2repo на реальный путь
         }
     }
-    // tools { maven 'Maven3' } // Блок tools больше не нужен, т.к. Maven есть в образе
+    // tools не нужен, если Maven в образе
+
     environment {
-        // ... остальные переменные окружения остаются ...
-        SONAR_CRED_ID = 'SONARQUBE_TOKEN'
-        SONAR_HOST_NAME = 'MySonarQubeServer'
-        SONAR_PROJECT_KEY = 'your-project-key'
+        SONAR_CRED_ID = 'SONARQUBE_TOKEN' // <-- ЗАМЕНИТЕ на ваш Credentials ID
+        SONAR_HOST_NAME = 'MySonarQubeServer' // <-- ЗАМЕНИТЕ на имя вашего сервера SonarQube в Jenkins
+        SONAR_PROJECT_KEY = 'your-project-key' // <-- ЗАМЕНИТЕ на ключ вашего проекта в SonarQube
+
+        // Определяем путь для локального репозитория Maven внутри контейнера
+        // Вариант 1: Использовать директорию внутри рабочего пространства (не кэшируется между сборками, если workspace очищается)
+        MAVEN_REPO_LOCAL = ".m2/repository"
+        // Вариант 2: Использовать путь, смонтированный через args -v (если используете кэширование)
+        // MAVEN_REPO_LOCAL = "/var/maven/repository" // Должен совпадать с путем в args -v
     }
+
     stages {
         stage('Checkout') {
             steps {
                 echo "Получение кода..."
-                checkout scm // Явно добавим checkout, если не используется Multibranch
+                checkout scm
             }
         }
+
         stage('Build') {
             steps {
-                // Теперь команда mvn должна быть доступна из PATH внутри контейнера
-                sh 'mvn clean verify'
+                // Диагностика (можно будет убрать после успешного запуска)
+                sh 'echo "--- DIAGNOSTICS ---"'
+                sh 'whoami'
+                sh 'id'
+                sh 'echo "HOME env var: [$HOME]"' // Посмотрим, установлена ли HOME
+                sh 'pwd' // Убедимся, что мы в /var/lib/jenkins/workspace/test
+                sh 'echo "--- END DIAGNOSTICS ---"'
+
+                // Запускаем Maven, явно указывая путь к локальному репозиторию
+                // Используем переменную MAVEN_REPO_LOCAL из environment
+                sh "mvn -Dmaven.repo.local='${env.MAVEN_REPO_LOCAL}' clean verify"
             }
         }
+
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv(credentialsId: env.SONAR_CRED_ID, installationName: env.SONAR_HOST_NAME) {
-                    // Maven доступен, запускаем анализ
-                    sh "mvn sonar:sonar -Dsonar.projectKey=${env.SONAR_PROJECT_KEY}"
+                    // Также передаем путь к локальному репозиторию
+                    sh "mvn -Dmaven.repo.local='${env.MAVEN_REPO_LOCAL}' sonar:sonar -Dsonar.projectKey=${env.SONAR_PROJECT_KEY}"
                 }
             }
         }
+
         stage('Quality Gate Status') {
             steps {
                 timeout(time: 10, unit: 'MINUTES') {
@@ -44,10 +66,11 @@ pipeline {
             }
         }
     }
+
     post {
         always {
             echo 'Пайплайн завершен.'
-            // cleanWs() // Очистка рабочего пространства (требует плагин Workspace Cleanup)
+            // cleanWs()
         }
         success {
             echo 'Сборка и анализ успешно завершены!'
@@ -56,8 +79,7 @@ pipeline {
             echo 'Сборка или анализ завершились с ошибкой.'
         }
         unstable {
-            // Может быть вызвано Quality Gate (статус WARN) или тестами
-            echo 'Пайплайн нестабилен (возможно, Quality Gate не пройден или есть ошибки тестов).'
+            echo 'Пайплайн нестабилен.'
         }
     }
 }
