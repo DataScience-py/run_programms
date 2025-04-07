@@ -3,65 +3,47 @@
 pipeline {
     agent {
         docker {
-            image 'eclipse-temurin:21-jdk' // Официальный образ OpenJDK 21 (Temurin)
-            // args '-v $HOME/.m2:/root/.m2' // Пример для монтирования кэша Maven. Проверьте путь '/root/.m2' для пользователя в образе.
+            // Используем образ, где есть и Maven, и JDK 21
+            image 'maven:3.9-eclipse-temurin-21'
+            // args '-v $HOME/.m2:/root/.m2' // Можно оставить для кэширования Maven
         }
     }
-
-    tools {
-        // !!! ВАЖНО: Убедитесь, что имя 'Maven3' ТОЧНО совпадает
-        // с именем Maven, настроенным в Jenkins -> Global Tool Configuration !!!
-        maven 'Maven3'
-    }
-
+    // tools { maven 'Maven3' } // Блок tools больше не нужен, т.к. Maven есть в образе
     environment {
-        SONAR_CRED_ID = 'SONARQUBE_TOKEN' // <-- ЗАМЕНИТЕ на ваш Credentials ID
-        SONAR_HOST_NAME = 'MySonarQubeServer' // <-- ЗАМЕНИТЕ на имя вашего сервера SonarQube в Jenkins
-        SONAR_PROJECT_KEY = 'your-project-key' // <-- ЗАМЕНИТЕ на ключ вашего проекта в SonarQube
-        // Можно добавить переменную для ветки, если используется Multibranch Pipeline
-        // SONAR_BRANCH_NAME = env.BRANCH_NAME ?: 'main' // Использует имя ветки из Jenkins или 'main' по умолчанию
+        // ... остальные переменные окружения остаются ...
+        SONAR_CRED_ID = 'SONARQUBE_TOKEN'
+        SONAR_HOST_NAME = 'MySonarQubeServer'
+        SONAR_PROJECT_KEY = 'your-project-key'
     }
-
     stages {
         stage('Checkout') {
             steps {
                 echo "Получение кода..."
-                // Обычно выполняется автоматически (Multibranch) или через SCM в настройках Job
-                // checkout scm
+                checkout scm // Явно добавим checkout, если не используется Multibranch
             }
         }
-
         stage('Build') {
             steps {
-                // Очистка, компиляция, тесты, упаковка
+                // Теперь команда mvn должна быть доступна из PATH внутри контейнера
                 sh 'mvn clean verify'
             }
         }
-
         stage('SonarQube Analysis') {
             steps {
                 withSonarQubeEnv(credentialsId: env.SONAR_CRED_ID, installationName: env.SONAR_HOST_NAME) {
-                    // Запускаем анализ SonarQube с помощью Maven
-                    // Добавляем параметры, если нужно (например, для веток)
-                    // sh "mvn sonar:sonar -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} -Dsonar.branch.name=${env.SONAR_BRANCH_NAME}"
+                    // Maven доступен, запускаем анализ
                     sh "mvn sonar:sonar -Dsonar.projectKey=${env.SONAR_PROJECT_KEY}"
                 }
             }
         }
-
         stage('Quality Gate Status') {
             steps {
-                // Оборачиваем waitForQualityGate в блок timeout
-                // Указываем время ожидания и единицы измерения для блока timeout
                 timeout(time: 10, unit: 'MINUTES') {
-                    // Сам waitForQualityGate проверяет статус.
-                    // abortPipeline: true - прервет сборку, если статус FAILED.
                     waitForQualityGate abortPipeline: true
                 }
             }
         }
     }
-
     post {
         always {
             echo 'Пайплайн завершен.'
