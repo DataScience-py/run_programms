@@ -1,87 +1,71 @@
 // Jenkinsfile (Declarative Pipeline)
 
 pipeline {
-    // Агент для выполнения пайплайна
     agent {
-        // Запускаем сборку внутри Docker-контейнера
         docker {
             image 'eclipse-temurin:21-jdk' // Официальный образ OpenJDK 21 (Temurin)
-            // Можно добавить args для монтирования кэша Maven/Gradle для ускорения
-            // args '-v $HOME/.m2:/root/.m2' // Пример для Maven. Путь /root/.m2 зависит от пользователя в образе.
-            // Убедитесь, что пользователь Jenkins имеет права на $HOME/.m2 на хосте.
+            // args '-v $HOME/.m2:/root/.m2' // Пример для монтирования кэша Maven. Проверьте путь '/root/.m2' для пользователя в образе.
         }
     }
 
-    // Инструменты, необходимые для сборки (должны быть настроены в Jenkins)
     tools {
-        maven 'Maven3' // Имя вашей конфигурации Maven в Jenkins Global Tool Configuration
+        // !!! ВАЖНО: Убедитесь, что имя 'Maven3' ТОЧНО совпадает
+        // с именем Maven, настроенным в Jenkins -> Global Tool Configuration !!!
+        maven 'Maven3'
     }
 
-    // Переменные окружения для пайплайна
     environment {
-        // ID Учетных данных (Credentials ID) для токена SonarQube в Jenkins (тип Secret Text)
         SONAR_CRED_ID = 'SONARQUBE_TOKEN' // <-- ЗАМЕНИТЕ на ваш Credentials ID
-        // Имя SonarQube сервера, настроенного в Jenkins -> Configure System -> SonarQube servers
-        // Оставьте пустым '', если используется единственный/стандартный сервер.
         SONAR_HOST_NAME = 'MySonarQubeServer' // <-- ЗАМЕНИТЕ на имя вашего сервера SonarQube в Jenkins
-        // Уникальный ключ вашего проекта в SonarQube
-        // Лучше вынести в параметры Jenkins Job или определить динамически
         SONAR_PROJECT_KEY = 'your-project-key' // <-- ЗАМЕНИТЕ на ключ вашего проекта в SonarQube
+        // Можно добавить переменную для ветки, если используется Multibranch Pipeline
+        // SONAR_BRANCH_NAME = env.BRANCH_NAME ?: 'main' // Использует имя ветки из Jenkins или 'main' по умолчанию
     }
 
     stages {
-        stage('Checkout') { // Шаг: Получение исходного кода
+        stage('Checkout') {
             steps {
-                // Если используется Multibranch Pipeline или Git SCM в настройках Job,
-                // этот шаг обычно выполняется автоматически.
-                // Можно добавить явно: checkout scm
                 echo "Получение кода..."
-                // Для примера, просто выводим сообщение
+                // Обычно выполняется автоматически (Multibranch) или через SCM в настройках Job
+                // checkout scm
             }
         }
 
-        stage('Build') { // Шаг: Сборка проекта
+        stage('Build') {
             steps {
-                // Используем Maven для компиляции, тестов и упаковки
-                // 'mvn clean verify' - выполняет тесты и проверки, что важно для SonarQube (покрытие кода)
-                // Используйте 'mvn clean package', если тесты запускаются отдельно или не нужны для анализа.
+                // Очистка, компиляция, тесты, упаковка
                 sh 'mvn clean verify'
             }
         }
 
-        stage('SonarQube Analysis') { // Шаг: Анализ кода с помощью SonarQube
+        stage('SonarQube Analysis') {
             steps {
-                // Используем обертку withSonarQubeEnv для автоматической настройки
-                // переменных окружения SONAR_HOST_URL и SONAR_LOGIN (используя SONAR_CRED_ID)
-                // 'installationName' должно совпадать с именем сервера в Jenkins Configure System
                 withSonarQubeEnv(credentialsId: env.SONAR_CRED_ID, installationName: env.SONAR_HOST_NAME) {
-                    // Запускаем анализ SonarQube с помощью Maven плагина
-                    // Убедитесь, что sonar-maven-plugin доступен (можно указать в pom.xml или вызвать явно)
-                    // Передаем ключ проекта. URL и токен будут установлены `withSonarQubeEnv`.
-                    // Можно передать доп. параметры, например, для анализа веток:
-                    // -Dsonar.branch.name=${env.BRANCH_NAME} (env.BRANCH_NAME доступна в Multibranch Pipeline)
+                    // Запускаем анализ SonarQube с помощью Maven
+                    // Добавляем параметры, если нужно (например, для веток)
+                    // sh "mvn sonar:sonar -Dsonar.projectKey=${env.SONAR_PROJECT_KEY} -Dsonar.branch.name=${env.SONAR_BRANCH_NAME}"
                     sh "mvn sonar:sonar -Dsonar.projectKey=${env.SONAR_PROJECT_KEY}"
                 }
             }
         }
 
-        stage('Quality Gate Status') { // Шаг: Проверка статуса Quality Gate в SonarQube
+        stage('Quality Gate Status') {
             steps {
-                // Ждем, пока SonarQube обработает отчет анализа (это происходит в фоне)
-                // и проверяем статус Quality Gate.
-                // timeout: время ожидания (здесь 10 минут).
-                // abortPipeline: true - пайплайн упадет, если Quality Gate не пройден (FAILED).
-                // SonarQube может вернуть статус WARN, ERROR, OK. Обычно FAILED прерывает сборку.
-                waitForQualityGate abortPipeline: true, timeout: 10, unit: 'MINUTES'
+                // Оборачиваем waitForQualityGate в блок timeout
+                // Указываем время ожидания и единицы измерения для блока timeout
+                timeout(time: 10, unit: 'MINUTES') {
+                    // Сам waitForQualityGate проверяет статус.
+                    // abortPipeline: true - прервет сборку, если статус FAILED.
+                    waitForQualityGate abortPipeline: true
+                }
             }
         }
     }
 
-    post { // Действия после завершения пайплайна
+    post {
         always {
             echo 'Пайплайн завершен.'
-            // Очистка рабочего пространства (требует плагин Workspace Cleanup)
-            // cleanWs()
+            // cleanWs() // Очистка рабочего пространства (требует плагин Workspace Cleanup)
         }
         success {
             echo 'Сборка и анализ успешно завершены!'
@@ -90,8 +74,8 @@ pipeline {
             echo 'Сборка или анализ завершились с ошибкой.'
         }
         unstable {
-            // Quality Gate может перевести сборку в статус UNSTABLE, а не FAILURE
-            echo 'Пайплайн нестабилен (возможно, Quality Gate не пройден).'
+            // Может быть вызвано Quality Gate (статус WARN) или тестами
+            echo 'Пайплайн нестабилен (возможно, Quality Gate не пройден или есть ошибки тестов).'
         }
     }
 }
